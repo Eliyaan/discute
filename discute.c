@@ -83,11 +83,12 @@ void frame(Client client) {
 			if (dist_start >= length)
 			{
 				/* Query more messages if we need more */
-				res = query_older_messages_from_backend(64, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths);
+				res = backend_older_messages_query(64, client.server, client.group, client.channel, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths);
 				if (res == -1)
 				{
 					// Couldn't query more message -> no network
 					failed_to_query_messages = 1;
+					break;
 				}
 				else if (res == 0)
 				{
@@ -98,6 +99,24 @@ void frame(Client client) {
 					/* Update the circular buffer, set the old messages to freed */
 					/* res = number of messages returned */
 					// TODO
+					/* Find where the messages will be stored and which ones will be replaced */
+					if (cap - start < length + res) /* check for wrap around with length */
+					{
+					/* Mark the messages as freed by the frontend */
+					/* Store the new messages */
+					/* Update channel length, start */
+					}
+					else
+					{
+				res = backend_older_messages_query(64, client.server, client.group, client.channel, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths);
+						/* Store the new messages */
+						memcpy(&channel->unix_ms_timestamps[start + length], ret_unix_ms_timestamps, (sizeof *channel->unix_ms_timestamps) * res);
+						memcpy(&channel->messages[start + length], ret_messages, (sizeof *channel->messages) * res);
+						memcpy(&channel->senders[start + length], ret_senders, (sizeof *channel->senders) * res);
+						memcpy(&channel->message_lengths[start + length], ret_message_lengths, (sizeof channel->message_lengths) * res);
+						/* Update channel length, start */
+
+					}
 				}
 			}
 			if (i >= cap)
