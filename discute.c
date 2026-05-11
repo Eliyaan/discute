@@ -18,13 +18,16 @@ typedef struct {
 
 typedef struct {
 	ChannelGroup* groups;
-	char** group_names;
+	char**	group_names;
+	int* 	group_ids;
 } Server;
 
 
 typedef struct {
 	int y; /* y coord of the bottom of the screen, the screen moves when the user scrolls */
 	Server* servers;
+	int* 	server_ids;
+	char** 	server_names;
 	unsigned int server;
 	unsigned int group;
 	unsigned int channel;
@@ -33,6 +36,13 @@ typedef struct {
 	unsigned int message_space_height;
 	unsigned int message_space_width;
 } Client;
+
+enum UpdateTypes {
+	UPDATE_servers = 1;
+	UPDATE_groups = 1 << 1;
+	UPDATE_messages = 1 << 2;
+	
+}
 
 Client init(Client client)
 {
@@ -60,7 +70,18 @@ Client frame(Client client)
 	client.y += 10; /* scroll */
 
 	/* Update the backend: fetch new messages... and update the frontend accordingly (create new channels if needed) */ // TODO
-
+	res = backend_updates_fetch();
+	if (res != 0)
+	{
+		if (res & UPDATE_servers)
+		{ TODO
+		}
+		else if (res & UPDATE_groups)
+		{} TODO
+		else if (res & UPDATE_messages)
+		{} TODO
+	}
+	
 
 	
 	cur_server = client.servers[client.server];
@@ -200,5 +221,11 @@ Client frame(Client client)
 	}
 	
 	/* Draw user interface */ TODO
-	/* TODO: create comments for sections */
+	/* Draw the servers */ TODO
+	/* Draw the channels & scroll bar */ TODO
+	/* Draw the messages & scroll bar */ TODO
+	/* Draw the input bar */ TODO
+
+	/* Draw floating elements (on top of the rest) */ TODO maybe none?
 }
+
