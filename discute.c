@@ -14,20 +14,30 @@ typedef struct {
 	char** channel_names;
 	unsigned int* channel_update_times; /* time of the last update for each channel */
 	unsigned int* channel_order; /* can be sorted according to channel_update_times [0] = 5 -> 5th channel is at the top */
+	int channel_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
+	unsigned int length;
+	unsigned int cap;
+	char* unread; /* TODO something cleaner once there will be more bools */
 } ChannelGroup;
 
 typedef struct {
 	ChannelGroup* groups;
 	char**	group_names;
-	int* 	group_ids;
+	char* unread; /* TODO something cleaner once there will be more bools */
+	int* 	group_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
+	unsigned int length;
+	unsigned int cap;
 } Server;
 
 
 typedef struct {
 	int y; /* y coord of the bottom of the screen, the screen moves when the user scrolls */
 	Server* servers;
-	int* 	server_ids;
+	int* 	server_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
+	char* unread; /* TODO something cleaner once there will be more bools */
 	char** 	server_names;
+	unsigned int length; /* Server array length */
+	unsigned int cap; /* Server array cap */
 	unsigned int server;
 	unsigned int group;
 	unsigned int channel;
@@ -40,9 +50,20 @@ typedef struct {
 enum UpdateTypes {
 	UPDATE_servers = 1;
 	UPDATE_groups = 1 << 1;
-	UPDATE_messages = 1 << 2;
+	UPDATE_channels = 1 << 2;
 	
 }
+
+typedef struct {
+	int server_id;
+	int group_id;
+	char*	group_name;
+} GroupUpdate;
+
+typedef struct {
+	int server_id;
+	char* server_name;
+} ServerUpdate;
 
 Client init(Client client)
 {
@@ -58,6 +79,7 @@ Client frame(Client client)
 	unsigned int cap, start, length, top_message;
 	unsigned int* heights;
 	char failed_to_query_messages;
+	ServerUpdate server_update;
 	/* returned from new message querying */
 	unsigned long long*   ret_unix_ms_timestamps;
 	unsigned char** ret_messages;
@@ -74,11 +96,40 @@ Client frame(Client client)
 	if (res != 0)
 	{
 		if (res & UPDATE_servers)
-		{ TODO
+		{
+			while (res != 0)
+			{
+				res = backend_server_update_fetch(&server_update);
+				/* res = how many are left to fetch, often 0 */ 
+				/* Check if it is an already existing server */
+				i = dichotomy_int(server_update.server_id, client.server_ids, client.length)
+				if (i == -1 || client.server_ids[i] != server_update.server_id) // TODO adjust this according to the dichotomy results
+				{
+					/* New -> create data */
+					if (client.length == client.cap)
+					{
+						/* Grow arrays */
+						client.cap = (client.cap + 1) * 3 / 2;
+						realloc(client.server_ids, client.cap);
+						realloc(client.server_names, client.cap);
+						realloc(client.servers, client.cap);
+					}
+					client.server_ids[client.length] = server_update.server_id;
+					client.server_names[client.length] = server_update.server_name;
+					client.servers[client.length].cap = 0;
+					client.servers[client.length].length = 0;
+					/* The other fields will get filled by the next updates for groups etc.. */
+					client.length++;
+				}
+				else
+				{
+					client.server_names[i] = server_update.server_name;
+				}
+			}
 		}
-		else if (res & UPDATE_groups)
+		if (res & UPDATE_groups)
 		{} TODO
-		else if (res & UPDATE_messages)
+		if (res & UPDATE_channels)
 		{} TODO
 	}
 	
