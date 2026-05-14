@@ -12,18 +12,21 @@ typedef struct {
 typedef struct {
 	Channel* channels;
 	char** channel_names;
-	unsigned int* channel_update_times; /* time of the last update for each channel */
-	unsigned int* channel_order; /* can be sorted according to channel_update_times [0] = 5 -> 5th channel is at the top */
-	int channel_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
+	char* channel_unreads; /* TODO something cleaner once there will be more bools */
+	int* channel_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
 	unsigned int length;
 	unsigned int cap;
-	char* unread; /* TODO something cleaner once there will be more bools */
+
+/*
+	unsigned int* channel_update_times; /* time of the last update for each channel */
+	unsigned int* channel_order; /* can be sorted according to channel_update_times [0] = 5 -> 5th channel is at the top */
+*/
 } ChannelGroup;
 
 typedef struct {
 	ChannelGroup* groups;
 	char**	group_names;
-	char* unread; /* TODO something cleaner once there will be more bools */
+	char*   group_unreads; /* TODO something cleaner once there will be more bools */
 	int* 	group_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
 	unsigned int length;
 	unsigned int cap;
@@ -34,7 +37,7 @@ typedef struct {
 	int y; /* y coord of the bottom of the screen, the screen moves when the user scrolls */
 	Server* servers;
 	int* 	server_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
-	char* unread; /* TODO something cleaner once there will be more bools */
+	char*   server_unreads; /* TODO something cleaner once there will be more bools */
 	char** 	server_names;
 	unsigned int length; /* Server array length */
 	unsigned int cap; /* Server array cap */
@@ -57,6 +60,13 @@ enum UpdateTypes {
 typedef struct {
 	int server_id;
 	int group_id;
+	int channel_id;
+	char*	channel_name;
+} ChannelUpdate;
+
+typedef struct {
+	int server_id;
+	int group_id;
 	char*	group_name;
 } GroupUpdate;
 
@@ -72,7 +82,8 @@ Client init(Client client)
 
 Client frame(Client client)
 {
-	int i, dist_start, message_y, target_y, res, first_part, second_part, overwrite_part;
+	int i, dist_start, message_y, target_y, res, count, first_part, second_part, overwrite_part;
+	int server_i, group_i;
 	Channel* cur_channel;
 	ChannelGroup cur_group;
 	Server cur_server;
@@ -80,6 +91,8 @@ Client frame(Client client)
 	unsigned int* heights;
 	char failed_to_query_messages;
 	ServerUpdate server_update;
+	GroupUpdate group_update;
+	ChannelUpdate group_update;
 	/* returned from new message querying */
 	unsigned long long*   ret_unix_ms_timestamps;
 	unsigned char** ret_messages;
@@ -95,12 +108,14 @@ Client frame(Client client)
 	res = backend_updates_fetch();
 	if (res != 0)
 	{
+		/* Updates to the main data structures' metadata (~names and children) : servers, channel groups, channels */
 		if (res & UPDATE_servers)
 		{
-			while (res != 0)
+			count = 1;
+			/* count = how many are left to fetch, often 0 */ 
+			while (count != 0)
 			{
-				res = backend_server_update_fetch(&server_update);
-				/* res = how many are left to fetch, often 0 */ 
+				count = backend_server_update_fetch(&server_update); /* count is often 0 */
 				/* Check if it is an already existing server */
 				i = dichotomy_int(server_update.server_id, client.server_ids, client.length)
 				if (i == -1 || client.server_ids[i] != server_update.server_id) // TODO adjust this according to the dichotomy results
@@ -110,12 +125,14 @@ Client frame(Client client)
 					{
 						/* Grow arrays */
 						client.cap = (client.cap + 1) * 3 / 2;
-						realloc(client.server_ids, client.cap);
-						realloc(client.server_names, client.cap);
-						realloc(client.servers, client.cap);
+						realloc(client.server_ids, (sizeof *client.server_ids) * client.cap);
+						realloc(client.server_names, (sizeof *client.server_names) * client.cap);
+						realloc(client.server_unreads, (sizeof *client.server_unreads) * client.cap);
+						realloc(client.servers, (sizeof *client.servers) * client.cap);
 					}
 					client.server_ids[client.length] = server_update.server_id;
 					client.server_names[client.length] = server_update.server_name;
+					client.server_unreads[client.length] = 0;
 					client.servers[client.length].cap = 0;
 					client.servers[client.length].length = 0;
 					/* The other fields will get filled by the next updates for groups etc.. */
@@ -123,14 +140,101 @@ Client frame(Client client)
 				}
 				else
 				{
+					backend_server_name_mark_unused(client.server_names[i], i);
 					client.server_names[i] = server_update.server_name;
 				}
 			}
 		}
 		if (res & UPDATE_groups)
-		{} TODO
+		{
+			count = 1;
+			/* count = how many are left to fetch, often 0 */ 
+			while (count != 0)
+			{
+				count = backend_group_update_fetch(&group_update); /* count is often 0 */
+				/* Check if it is an already existing group */
+				server_i = dichotomy_int(group_update.server_id, client.server_ids, client.length)
+				if (server_i == -1 || client.server_ids[server_i] != group_update.server_id) // TODO adjust this according to the dichotomy results
+					error(Server not found in group update);
+				}
+				cur_server = client.servers[server_i];
+				i = dichotomy_int(group_update.group_id, cur_server.groups, cur_server.length);
+				if (i == -1 || cur_server.group_ids[i] != group_update.group_id) // TODO adjust this according to the dichotomy results
+				{
+					/* New -> create data */
+					if (cur_server.length == cur_server.cap)
+					{
+						/* Grow arrays */
+						cur_server.cap = (cur_server.cap + 1) * 3 / 2;
+						realloc(cur_server.group_ids, (sizeof *cur_server.group_ids) * cur_server.cap);
+						realloc(cur_server.group_names, (sizeof *cur_server.group_names) * cur_server.cap);
+						realloc(cur_server.group_unreads, (sizeof *cur_server.group_unreads) * cur_server.cap);
+						realloc(cur_server.groups, (sizeof *cur_server.groups) * cur_server.cap);
+					}
+					cur_server.group_ids[cur_server.length] = group_update.group_id;
+					cur_server.group_names[client.length] = group_update.group_name;
+					cur_server.group_unreads[client.length] = 0;
+					cur_server.groups[cur_server.length].cap = 0;
+					cur_server.groups[cur_server.length].length = 0;
+					/* The other fields will get filled by the next updates for groups etc.. */
+					cur_server.length++;
+				}
+				else
+				{
+					backend_group_name_mark_unused(cur_server.group_names[i], server_i, i);
+					cur_server.group_names[i] = group_update.group_name;
+				}
+				client.servers[server_i] = cur_server;
+			}
+		} 
 		if (res & UPDATE_channels)
-		{} TODO
+		{
+			count = 1;
+			/* count = how many are left to fetch, often 0 */ 
+			while (count != 0)
+			{
+				count = backend_channel_update_fetch(&channel_update); /* count is often 0 */
+				/* Check if it is an already existing group */
+				server_i = dichotomy_int(channel_update.server_id, client.server_ids, client.length)
+				if (server_i == -1 || client.server_ids[server_i] != channel_update.server_id) // TODO adjust this according to the dichotomy results
+					error(Server not found in group update);
+				}
+				cur_server = client.servers[server_i];
+				group_i = dichotomy_int(channel_update.group_id, cur_server.groups, cur_server.length);
+				if (group_i == -1 || cur_server.group_ids[group_i] != channel_update.group_id) // TODO adjust this according to the dichotomy results
+					error(Group not found in channel update);
+				}
+				cur_group = cur_server.groups[group_i];
+				i = dichotomy_int(channel_update.channel_id, cur_group.channels, cur_group.length);
+				if (i == -1 || cur_group.channel_ids[i] != channel_update.channel_id) // TODO adjust this according to the dichotomy results
+				{
+					/* New -> create data */
+					if (cur_group.length == cur_group.cap)
+					{
+						/* Grow arrays */
+						cur_group.cap = (cur_group.cap + 1) * 3 / 2;
+						realloc(cur_group.channel_ids, (sizeof *cur_group.channel_ids) * cur_group.cap);
+						realloc(cur_group.channel_names, (sizeof *cur_group.channel_names) * cur_group.cap);
+						realloc(cur_group.channel_unreads, (sizeof *cur_group.channel_unreads) * cur_group.cap);
+						realloc(cur_group.channels, (sizeof *cur_group.channels) * cur_group.cap);
+					}
+					cur_group.channel_ids[cur_group.length] = channel_update.channel_id;
+					cur_group.channel_names[client.length] = channel_update.channel_name;
+					cur_group.channel_unreads[client.length] = 0;
+					cur_group.channels[cur_group.length].cap = 0;
+					cur_group.channels[cur_group.length].length = 0;
+					/* The other fields will get filled by the next updates for channels etc.. */
+					cur_group.length++;
+				}
+				else
+				{
+					backend_channel_name_mark_unused(cur_group.channel_names[i], server_i, group_i, i);
+					cur_group.channel_names[i] = channel_update.channel_name;
+				}
+				cur_server.groups[group_i] = cur_group;
+			}
+		}
+		/* New messages... TODO */
 	}
 	
 
