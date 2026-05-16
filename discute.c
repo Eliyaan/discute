@@ -280,8 +280,10 @@ Client frame(Client client)
 	length = cur_channel->length;
 
 // TODO check if it works for both downwards scroll and upwards scroll
-	/* Find the message at the top of the screen */
-	message_y = client.bottom_message_y;
+	/* Find the message at the bottom of the screen by going downwards */
+	
+	/* Find the message at the bottom & top of the screen by going upwards */
+	message_y = client.bottom_message_y; /* top of the message */
 	i = client.bottom_message;
 	if (i < start) /* if wrapped by the circular buffer */
 	{
@@ -292,10 +294,25 @@ Client frame(Client client)
 		dist_start = i - start + 1;
 	}
 	message_y += heights[i]; 
-	target_y = client.y + client.message_area_height;
-
-	while (message_y < target_y)
+	
+	if (message_y < target_y)
 	{
+		target_y = client.y;
+		client.bottom_message = -1;
+	}
+	else
+	{
+		/* Already found the bottom message */
+		target_y = client.y + client.message_area_height;
+	}
+
+	while (message_y < target_y || client.bottom_message == -1)
+	{
+		if (client.bottom_message == -1 && message_y > target_y)
+		{
+			client.bottom_message = i		
+			target_y = client.y + client.message_area_height;
+		}
 		/* Search upwards */
 		i++;
 		dist_start++;
@@ -392,8 +409,14 @@ Client frame(Client client)
 		}
 		message_y += heights[i];
 	}
+	if (client.bottom_message == -1)
+	{
+		client.bottom_message = i;
+		/* No message visible on the screen */
+		/* Maybe block the scroll ? */	
+	}
 	top_message = i;
-
+	
 	/* Find the message at the bottom of the screen if it changed */
 	heights = cur_channel->heights;
 	cap = cur_channel->cap;
