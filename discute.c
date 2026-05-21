@@ -112,8 +112,8 @@ Client init(Client client)
 
 Client frame(Client client)
 {
-	int i, dist_start, message_y, target_y, res, count, first_part, second_part, overwrite_part;
-	int server_i, group_i;
+	int i, dist_start, message_y, target_y, res, count, end_part, start_part, overwrite_part;
+	int server_i, group_i, write_i;
 	Channel* cur_channel;
 	ChannelGroup cur_group;
 	Server cur_server;
@@ -279,12 +279,9 @@ Client frame(Client client)
 	start = cur_channel->start;
 	length = cur_channel->length;
 
-// TODO check if it works for both downwards scroll and upwards scroll
-	/* Find the message at the bottom of the screen by going downwards */
-	
-	/* Find the message at the bottom & top of the screen by going upwards */
-	message_y = client.bottom_message_y; /* top of the message */
-	i = client.bottom_message;
+	/* Find the message at the bottom of the screen by going downwards */ TODO
+	message_y = client.bottom_message_y; /* bottom of the message */
+	i = client.bottom_message; 
 	if (i < start) /* if wrapped by the circular buffer */
 	{
 		dist_start = i + cap - start + 1;
@@ -293,11 +290,131 @@ Client frame(Client client)
 	{
 		dist_start = i - start + 1;
 	}
-	message_y += heights[i]; 
+
+	target_y = client.y;
+	while (message_y > target_y)
+	{
+		/* Search upwards */
+		i--;
+		dist_start--;
+		message_y -= heights[i];
+		if (i == 0)
+		{
+			i = cap - 1;
+		}
+		if (dist_start == 0)
+		{
+			/* Query more messages if we need more */
+			res = backend_newer_messages_query(64, client.server, client.group, client.channel, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths);
+			if (res == -1)
+			{
+				// Couldn't query more message -> no network
+				failed_to_query_messages = 1;
+				break;
+			}
+			else if (res == 0)
+			{
+				break;
+			}
+			else TODO update the logic for loading messages when scrolling downwards
+			{
+				/* Update the circular buffer, set the old messages to freed */
+				/* res = number of messages returned */
+			
+				/* Find where the messages will be stored and which ones will be replaced */
+				if (cap < length + res) /* check for overwrite */
+				{
+					start_part = length + start + res - cap;
+					end_part = res - start_part;
+					overwrite_part = cap - length - res;
+
+					/* Mark the messages as freed by the frontend */
+					backend_message_mark_unused_old(overwrite_part); /* messages at the end of the buffer */
+
+					/* Store the new messages */
+					/* end of the circular buffer */
+					memcpy(&cur_channel->unix_ms_timestamps[start + length], ret_unix_ms_timestamps, (sizeof *cur_channel->unix_ms_timestamps) * end_part);
+					memcpy(&cur_channel->messages[start + length], ret_messages, (sizeof *cur_channel->messages) * end_part);
+					memcpy(&cur_channel->senders[start + length], ret_senders, (sizeof *cur_channel->senders) * end_part);
+					memcpy(&cur_channel->message_lengths[start + length], ret_message_lengths, (sizeof *cur_channel->message_lengths) * end_part);
+					/* start of the circular buffer */
+					memcpy(&cur_channel->unix_ms_timestamps[0], ret_unix_ms_timestamps[res], (sizeof *cur_channel->unix_ms_timestamps) * start_part);
+					memcpy(&cur_channel->messages[0], ret_messages[res], (sizeof *cur_channel->messages) * start_part);
+					memcpy(&cur_channel->senders[0], ret_senders[res], (sizeof *cur_channel->senders) * start_part);
+					memcpy(&cur_channel->message_lengths[0], ret_message_lengths[res], (sizeof *cur_channel->message_lengths) * start_part);
+
+					/* Update channel length, start */
+					length = cap;
+					start = start_part;
+					if (i < start) /* if wrapped by the circular buffer */
+					{
+						dist_start = i + cap - start + 1;
+					}
+					else
+					{
+						dist_start = i - start + 1;
+					}
+					cur_channel->length = length;
+					cur_channel->start = start;
+				}
+				else if (start < res) /* check for wrap around with length */
+				{
+					/* Store the new messages */
+					start_part = start;
+					end_part = res - start_part;
+					/* end of the circular buffer */
+					write_i = cap - end_part;
+					memcpy(&channel->unix_ms_timestamps[write_i], ret_unix_ms_timestamps, (sizeof *cur_channel->unix_ms_timestamps) * end_part);
+					memcpy(&channel->messages[write_i], ret_messages, (sizeof *cur_channel->messages) * end_part);
+					memcpy(&channel->senders[write_i], ret_senders, (sizeof *cur_channel->senders) * end_part);
+					memcpy(&channel->message_lengths[write_i], ret_message_lengths, (sizeof *cur_channel->message_lengths) * end_part);
+					/* start of the circular buffer */
+					memcpy(&channel->unix_ms_timestamps[0], ret_unix_ms_timestamps[res], (sizeof *cur_channel->unix_ms_timestamps) * start_part);
+					memcpy(&channel->messages[0], ret_messages[res], (sizeof *cur_channel->messages) * start_part);
+					memcpy(&channel->senders[0], ret_senders[res], (sizeof *cur_channel->senders) * start_part);
+					memcpy(&channel->message_lengths[0], ret_message_lengths[res], (sizeof *cur_channel->message_lengths) * start_part);
+					/* Update channel length and start */
+					start = cap - end_part;
+					cur_channel->start = start;
+					length += res;
+					cur_channel->length = length;
+				}
+				else /* No wrapping or overwriting */
+				{ 
+					start = start - res;
+					/* Store the new messages */
+					memcpy(&cur_channel->unix_ms_timestamps[start], ret_unix_ms_timestamps, (sizeof *cur_channel->unix_ms_timestamps) * res);
+					memcpy(&cur_channel->messages[start], ret_messages, (sizeof *cur_channel->messages) * res);
+					memcpy(&cur_channel->senders[start], ret_senders, (sizeof *cur_channel->senders) * res);
+					memcpy(&cur_channel->message_lengths[start], ret_message_lengths, (sizeof *cur_channel->message_lengths) * res);
+					/* Update channel length and start */
+					length += res;
+					cur_channel->length = length;
+					cur_channel->start = start;
+				}
+			}
+			backend_older_messages_query_finished(64, client.server, client.group, client.channel, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths); /* So the backend can clear up what needs to be cleared */
+		}
+	}
+	client.bottom_message_y = message_y;
+	client.bottom_message = i; 
 	
+	/* Find the message at the bottom & top of the screen by going upwards */
+	i = client.bottom_message;
+	message_y = client.bottom_message_y; 
+	message_y += heights[i]; /* top of the message */
+	if (i < start) /* if wrapped by the circular buffer */
+	{
+		dist_start = i + cap - start + 1;
+	}
+	else
+	{
+		dist_start = i - start + 1;
+	}
+	
+	target_y = client.y;
 	if (message_y < target_y)
 	{
-		target_y = client.y;
 		client.bottom_message = -1;
 	}
 	else
@@ -310,6 +427,7 @@ Client frame(Client client)
 	{
 		if (client.bottom_message == -1 && message_y > target_y)
 		{
+			client.bottom_message_y = message_y - height[i]; /* bottom of the message */
 			client.bottom_message = i		
 			target_y = client.y + client.message_area_height;
 		}
@@ -320,7 +438,7 @@ Client frame(Client client)
 		{
 			i = 0;
 		}
-		if (dist_start >= length)
+		if (dist_start == length)
 		{
 			/* Query more messages if we need more */
 			res = backend_older_messages_query(64, client.server, client.group, client.channel, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths);
@@ -340,29 +458,113 @@ Client frame(Client client)
 				/* res = number of messages returned */
 			
 				/* Find where the messages will be stored and which ones will be replaced */
+				new_data_i = start + length;
+				if (new_data_i > cap)
+				{
+					new_data_i -= cap;
+					new_data_end = new_data_i + res;
+					if (new_data_end > cap) 
+					{
+						first_part = cap - new_data_i; /* first part of the res buffer */
+						second_part = new_data_end - cap; /* second part that is wrapped around */
+						// TODO do it in two times
+						/* overwrite is certain */
+						if (start <= second_part)
+						{
+							overwrite = second_part - start;
+						}
+						else
+						{
+							overwrite = (cap - start) + second_part
+						}
+						backend_message_mark_unused_recent(overwrite); /* messages at the start of the buffer */
+						start = second_part;
+						dist_start -= overwrite;
+						length = cap
+						cur_channel->length = length;
+						cur_channel->start= start;
+					} 
+					else
+					{
+						write data TODO
+						if (new_data_end > start)
+						{
+							backend_message_mark_unused_recent(new_data_end - start); /* messages at the start of the buffer */
+							dist_start -= new_data_end - start;
+							start = new_data_end;
+							length = cap
+							cur_channel->start = start;
+							cur_channel->length = length;
+						}
+						else
+						{
+							length += res;
+							cur_channel->length = length;
+						}
+					}
+				}
+				else
+				{
+					new_data_end = new_data_i + res;
+					if (new_data_end > cap) 
+					{
+						first_part = cap - new_data_i; /* first part of the res buffer */
+						second_part = new_data_end - cap; /* second part that is wrapped around */
+						// TODO do it in two times
+						if (second_part > start) /* check if overwrite */
+						{
+							backend_message_mark_unused_recent(second_part - start); /* messages at the start of the buffer */
+							dist_start -= second_part - start;
+							start = second_part;
+							length = cap
+							cur_channel->length = length;
+							cur_channel->start= start;
+						}
+						else
+						{
+							length += res;
+							cur_channel->length = length;
+						}
+					} 
+					else
+					{
+						write data TODO
+
+						length += res;
+						cur_channel->length = length;
+					}
+					
+				}
+				// OLD
 				if (cap < length + res) /* check for overwrite */
 				{
-					second_part = length + start + res - cap;
-					first_part = res - second_part;
-					overwrite_part = cap - length - res;
+					/* we know the buffer is already wrapping around */
+					start_part = start + length + res - 2 * cap; /* by how much do we wrap with new data, double wrap*/
+					end_part = 2 * cap - start - len; /* how much did not wrap around */
+					overwrite_part = length + res - cap;
 
 					/* Mark the messages as freed by the frontend */
-					backend_message_mark_unused(overwrite_part);
+					backend_message_mark_unused_recent(overwrite_part); /* messages at the start of the buffer */
 
 					/* Store the new messages */
-					memcpy(&cur_channel->unix_ms_timestamps[start + length], ret_unix_ms_timestamps, (sizeof *cur_channel->unix_ms_timestamps) * first_part);
-					memcpy(&cur_channel->messages[start + length], ret_messages, (sizeof *cur_channel->messages) * first_part);
-					memcpy(&cur_channel->senders[start + length], ret_senders, (sizeof *cur_channel->senders) * first_part);
-					memcpy(&cur_channel->message_lengths[start + length], ret_message_lengths, (sizeof *cur_channel->message_lengths) * first_part);
-					/* start of the circular buffer */
-					memcpy(&cur_channel->unix_ms_timestamps[0], ret_unix_ms_timestamps[res], (sizeof *cur_channel->unix_ms_timestamps) * second_part);
-					memcpy(&cur_channel->messages[0], ret_messages[res], (sizeof *cur_channel->messages) * second_part);
-					memcpy(&cur_channel->senders[0], ret_senders[res], (sizeof *cur_channel->senders) * second_part);
-					memcpy(&cur_channel->message_lengths[0], ret_message_lengths[res], (sizeof *cur_channel->message_lengths) * second_part);
+					/* end of the circular buffer */
+					memcpy(&cur_channel->unix_ms_timestamps[start + length], ret_unix_ms_timestamps, (sizeof *cur_channel->unix_ms_timestamps) * end_part);
+					memcpy(&cur_channel->messages[start + length], ret_messages, (sizeof *cur_channel->messages) * end_part);
+					memcpy(&cur_channel->senders[start + length], ret_senders, (sizeof *cur_channel->senders) * end_part);
+					memcpy(&cur_channel->message_lengths[start + length], ret_message_lengths, (sizeof *cur_channel->message_lengths) * end_part);
+					start = start + overwrite_part; /* if the new data does not wrap */
+					if (start_part) /* check for wrap around with new data */
+					{
+						/* start of the circular buffer */
+						memcpy(&cur_channel->unix_ms_timestamps[0], ret_unix_ms_timestamps[res], (sizeof *cur_channel->unix_ms_timestamps) * start_part);
+						memcpy(&cur_channel->messages[0], ret_messages[res], (sizeof *cur_channel->messages) * start_part);
+						memcpy(&cur_channel->senders[0], ret_senders[res], (sizeof *cur_channel->senders) * start_part);
+						memcpy(&cur_channel->message_lengths[0], ret_message_lengths[res], (sizeof *cur_channel->message_lengths) * start_part);
+						start = start_part;
+					}
 
 					/* Update channel length, start */
 					length = cap;
-					start = second_part;
 					if (i < start) /* if wrapped by the circular buffer */
 					{
 						dist_start = i + cap - start + 1;
@@ -377,18 +579,18 @@ Client frame(Client client)
 				else if (cap - start < length + res) /* check for wrap around with length */
 				{
 					/* Store the new messages */
-					second_part = length + start + res - cap;
-					first_part = res - second_part;
+					start_part = length + start + res - cap;
+					end_part = res - start_part;
 					/* end of the circular buffer */
-					memcpy(&channel->unix_ms_timestamps[start + length], ret_unix_ms_timestamps, (sizeof *cur_channel->unix_ms_timestamps) * first_part);
-					memcpy(&channel->messages[start + length], ret_messages, (sizeof *cur_channel->messages) * first_part);
-					memcpy(&channel->senders[start + length], ret_senders, (sizeof *cur_channel->senders) * first_part);
-					memcpy(&channel->message_lengths[start + length], ret_message_lengths, (sizeof *cur_channel->message_lengths) * first_part);
+					memcpy(&channel->unix_ms_timestamps[start + length], ret_unix_ms_timestamps, (sizeof *cur_channel->unix_ms_timestamps) * end_part);
+					memcpy(&channel->messages[start + length], ret_messages, (sizeof *cur_channel->messages) * end_part);
+					memcpy(&channel->senders[start + length], ret_senders, (sizeof *cur_channel->senders) * end_part);
+					memcpy(&channel->message_lengths[start + length], ret_message_lengths, (sizeof *cur_channel->message_lengths) * end_part);
 					/* start of the circular buffer */
-					memcpy(&channel->unix_ms_timestamps[0], ret_unix_ms_timestamps[res], (sizeof *cur_channel->unix_ms_timestamps) * second_part);
-					memcpy(&channel->messages[0], ret_messages[res], (sizeof *cur_channel->messages) * second_part);
-					memcpy(&channel->senders[0], ret_senders[res], (sizeof *cur_channel->senders) * second_part);
-					memcpy(&channel->message_lengths[0], ret_message_lengths[res], (sizeof *cur_channel->message_lengths) * second_part);
+					memcpy(&channel->unix_ms_timestamps[0], ret_unix_ms_timestamps[res], (sizeof *cur_channel->unix_ms_timestamps) * start_part);
+					memcpy(&channel->messages[0], ret_messages[res], (sizeof *cur_channel->messages) * start_part);
+					memcpy(&channel->senders[0], ret_senders[res], (sizeof *cur_channel->senders) * start_part);
+					memcpy(&channel->message_lengths[0], ret_message_lengths[res], (sizeof *cur_channel->message_lengths) * start_part);
 					/* Update channel length */
 					length += res;
 					cur_channel->length = length;
