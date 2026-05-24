@@ -13,6 +13,7 @@ typedef struct {
 	Channel* channels;
 	char** channel_names;
 	char* channel_unreads; /* TODO something cleaner once there will be more bools */
+	// TODO scrolls
 	int* channel_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
 	unsigned int length;
 	unsigned int cap;
@@ -38,8 +39,14 @@ enum UpdateTypes {
 	UPDATE_servers = 1;
 	UPDATE_groups = 1 << 1;
 	UPDATE_channels = 1 << 2;
-	
+	UPDATE_messages = 1 << 3;
 }
+
+typedef struct {
+	int server_id;
+	int group_id;
+	int channel_id;
+} MessageUpdate;
 
 typedef struct {
 	int server_id;
@@ -64,6 +71,7 @@ typedef struct {
 	Server* servers;
 	int* 	server_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
 	char*   server_unreads; /* TODO something cleaner once there will be more bools */
+	// TODO scrolls
 	char** 	server_names;
 	unsigned int length; /* Server array length */
 	unsigned int cap; /* Server array cap */
@@ -113,7 +121,7 @@ Client init(Client client)
 Client frame(Client client)
 {
 	int i, dist_start, message_y, target_y, res, count, first_part_len, second_part_len, overwrite_len;
-	int server_i, group_i, write_i;
+	int server_i, group_i, write_i, bottom_of_current_channel;
 	Channel* cur_channel;
 	ChannelGroup cur_group;
 	Server cur_server;
@@ -123,6 +131,7 @@ Client frame(Client client)
 	ServerUpdate server_update;
 	GroupUpdate group_update;
 	ChannelUpdate group_update;
+	MessageUpdate message_update;
 	/* returned from new message querying */
 	unsigned long long*   ret_unix_ms_timestamps;
 	unsigned char** ret_messages;
@@ -224,7 +233,7 @@ Client frame(Client client)
 			while (count != 0)
 			{
 				count = backend_channel_update_fetch(&channel_update); /* count is often 0 */
-				/* Check if it is an already existing group */
+				/* Check if it is an already existing channel */
 				server_i = dichotomy_int(channel_update.server_id, client.server_ids, client.length)
 				if (server_i == -1)
 					error(Server not found in group update);
@@ -264,7 +273,18 @@ Client frame(Client client)
 				cur_server.groups[group_i] = cur_group;
 			}
 		}
-		/* New messages... TODO */
+		/* New messages */
+		if (res & UPDATE_messages)
+		{
+			count = 1;
+			/* count = how many are left to fetch, often 0 */ 
+			while (count != 0)
+			{
+				count = backend_message_update_fetch(&message_update); /* count is often 0 */
+				TODO
+			}
+			
+		}
 	}
 	
 
@@ -334,11 +354,13 @@ Client frame(Client client)
 					memcpy(&cur_channel->messages[new_data_i], ret_messages, (sizeof *cur_channel->messages) * first_part_len);
 					memcpy(&cur_channel->senders[new_data_i], ret_senders, (sizeof *cur_channel->senders) * first_part_len);
 					memcpy(&cur_channel->message_lengths[new_data_i], ret_message_lengths, (sizeof *cur_channel->message_lengths) * first_part_len);
+					messages_calculate_heights(client, &cur_channel->messages[new_data_i], &cur_channel->heights[new_data_i], first_part_len); TODO
 					/* start of the circular buffer */
 					memcpy(cur_channel->unix_ms_timestamps, &ret_unix_ms_timestamps[first_part_len], (sizeof *cur_channel->unix_ms_timestamps) * second_part_len);
 					memcpy(cur_channel->messages, &ret_messages[first_part_len], (sizeof *cur_channel->messages) * second_part_len);
 					memcpy(cur_channel->senders, &ret_senders[first_part_len], (sizeof *cur_channel->senders) * second_part_len);
 					memcpy(cur_channel->message_lengths, &ret_message_lengths[first_part_len], (sizeof *cur_channel->message_lengths) * second_part_len);
+					messages_calculate_heights(client, cur_channel->messages, cur_channel->heights, second_part_len);
 					/* overwrite */
 					overwrite_len = res + length - cap;
 					if (overwrite_len > 0)
@@ -362,6 +384,7 @@ Client frame(Client client)
 					memcpy(&cur_channel->messages[new_data_i], ret_messages, (sizeof *cur_channel->messages) * res);
 					memcpy(&cur_channel->senders[new_data_i], ret_senders, (sizeof *cur_channel->senders) * res);
 					memcpy(&cur_channel->message_lengths[new_data_i], ret_message_lengths, (sizeof *cur_channel->message_lengths) * res);
+					messages_calculate_heights(client, &cur_channel->messages[new_data_i], &cur_channel->heights[new_data_i], res);
 					/* overwrite */
 					overwrite_len = res + length - cap;
 					if (overwrite_len > 0)
@@ -378,11 +401,20 @@ Client frame(Client client)
 					cur_channel->length = length;
 					cur_channel->start= start;
 				}
-			}
-			backend_newer_messages_query_finished(64, client.server, client.group, client.channel, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths); /* So the backend can clear up what needs to be cleared */
+			} 
+			/* the backend knows it can clean those up if needed */
+			backend_newer_messages_query_finished(64, client.server, client.group, client.channel, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths);
 		}
 	}
-	client.bottom_message_y = message_y;
+	bottom_of_current_channel = message_y > target_y; /* if true: autoscroll for new messages */
+	if (bottom_of_current_channel)
+	{
+		client.bottom_message_y = target_y;
+	}
+	else
+	{
+		client.bottom_message_y = message_y;
+	}
 	client.bottom_message = i; 
 	
 	/* Find the message at the bottom & top of the screen by going upwards */
@@ -426,7 +458,7 @@ Client frame(Client client)
 		}
 		if (dist_start == length)
 		{
-			/* Query more messages if we need more */
+			/* Query more messages if we need more */ TODO handle message heights
 			res = backend_older_messages_query(64, client.server, client.group, client.channel, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths);
 			if (res == -1)
 			{
@@ -459,11 +491,13 @@ Client frame(Client client)
 						memcpy(&cur_channel->messages[new_data_i], ret_messages, (sizeof *cur_channel->messages) * first_part_len);
 						memcpy(&cur_channel->senders[new_data_i], ret_senders, (sizeof *cur_channel->senders) * first_part_len);
 						memcpy(&cur_channel->message_lengths[new_data_i], ret_message_lengths, (sizeof *cur_channel->message_lengths) * first_part_len);
+						messages_calculate_heights(client, &cur_channel->messages[new_data_i], &cur_channel->heights[new_data_i], first_part_len);
 						/* start of the circular buffer */
 						memcpy(cur_channel->unix_ms_timestamps, &ret_unix_ms_timestamps[first_part_len], (sizeof *cur_channel->unix_ms_timestamps) * second_part_len);
 						memcpy(cur_channel->messages, &ret_messages[first_part_len], (sizeof *cur_channel->messages) * second_part_len);
 						memcpy(cur_channel->senders, &ret_senders[first_part_len], (sizeof *cur_channel->senders) * second_part_len);
 						memcpy(cur_channel->message_lengths, &ret_message_lengths[first_part_len], (sizeof *cur_channel->message_lengths) * second_part_len);
+						messages_calculate_heights(client, cur_channel->messages, cur_channel->heights, second_part_len);
 						/* overwrite is certain */
 						if (start <= second_part_len) /* overwrite not making the start wrap around */
 						{
@@ -487,6 +521,7 @@ Client frame(Client client)
 						memcpy(&cur_channel->messages[new_data_i], ret_messages, (sizeof *cur_channel->messages) * res);
 						memcpy(&cur_channel->senders[new_data_i], ret_senders, (sizeof *cur_channel->senders) * res);
 						memcpy(&cur_channel->message_lengths[new_data_i], ret_message_lengths, (sizeof *cur_channel->message_lengths) * res);
+						messages_calculate_heights(client, &cur_channel->messages[new_data_i], &cur_channel->heights[new_data_i], res);
 						/* check if the new data overwrites `start` of the circular buffer */
 						if (new_data_end > start) 
 						{
@@ -518,11 +553,13 @@ Client frame(Client client)
 						memcpy(&cur_channel->messages[new_data_i], ret_messages, (sizeof *cur_channel->messages) * first_part_len);
 						memcpy(&cur_channel->senders[new_data_i], ret_senders, (sizeof *cur_channel->senders) * first_part_len);
 						memcpy(&cur_channel->message_lengths[new_data_i], ret_message_lengths, (sizeof *cur_channel->message_lengths) * first_part_len);
+						messages_calculate_heights(client, &cur_channel->messages[new_data_i], &cur_channel->heights[new_data_i], first_part_len);
 						/* start of the circular buffer */
 						memcpy(cur_channel->unix_ms_timestamps, &ret_unix_ms_timestamps[first_part_len], (sizeof *cur_channel->unix_ms_timestamps) * second_part_len);
 						memcpy(cur_channel->messages, &ret_messages[first_part_len], (sizeof *cur_channel->messages) * second_part_len);
 						memcpy(cur_channel->senders, &ret_senders[first_part_len], (sizeof *cur_channel->senders) * second_part_len);
 						memcpy(cur_channel->message_lengths, &ret_message_lengths[first_part_len], (sizeof *cur_channel->message_lengths) * second_part_len);
+						messages_calculate_heights(client, cur_channel->messages, cur_channel->heights, second_part_len);
 						if (second_part_len > start) /* check if overwrite */
 						{
 							overwrite_len = second_part_len - start;
@@ -546,6 +583,7 @@ Client frame(Client client)
 						memcpy(&cur_channel->messages[new_data_i], ret_messages, (sizeof *cur_channel->messages) * res);
 						memcpy(&cur_channel->senders[new_data_i], ret_senders, (sizeof *cur_channel->senders) * res);
 						memcpy(&cur_channel->message_lengths[new_data_i], ret_message_lengths, (sizeof *cur_channel->message_lengths) * res);
+						messages_calculate_heights(client, &cur_channel->messages[new_data_i], &cur_channel->heights[new_data_i], res);
 
 						length += res;
 						cur_channel->length = length;
@@ -553,7 +591,8 @@ Client frame(Client client)
 					
 				}
 			}
-			backend_older_messages_query_finished(64, client.server, client.group, client.channel, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths); /* So the backend can clear up what needs to be cleared */
+			/* the backend knows it can clean those up if needed */
+			backend_older_messages_query_finished(64, client.server, client.group, client.channel, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths);
 		}
 		message_y += heights[i];
 	}
