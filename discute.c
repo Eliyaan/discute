@@ -4,7 +4,7 @@ typedef struct {
 	unsigned int* senders;
 	unsigned short* message_lengths; 
 	unsigned short* heights;  /* height at the current width of the message space */
-	unsigned int cap; // TODO enforce expected cap = 1024, at least > 64 (fetch size for the moment)
+	unsigned int cap; // expected cap = 1024, at least > 64 (fetch size for the moment)
 	unsigned int start;
 	unsigned int length;
 } Channel;
@@ -12,7 +12,7 @@ typedef struct {
 typedef struct {
 	Channel* channels;
 	char** channel_names;
-	char* channel_unreads; /* TODO something cleaner once there will be more bools */
+	char* channel_unreads;
 	unsigned int* channel_bottom_message_i; /* index of the message at the bottom of the screen */
 	int* channel_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
 	unsigned int length;
@@ -27,7 +27,7 @@ typedef struct {
 typedef struct {
 	ChannelGroup* groups;
 	char**	group_names;
-	char*   group_unreads; /* TODO something cleaner once there will be more bools */
+	char*   group_unreads;
 	int* 	group_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
 	unsigned int length;
 	unsigned int cap;
@@ -70,7 +70,7 @@ typedef struct {
 	int y; /* y coord of the bottom of the screen, the screen moves when the user scrolls */
 	Server* servers;
 	int* 	server_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
-	char*   server_unreads; /* TODO something cleaner once there will be more bools */
+	char*   server_unreads; 
 	// TODO scrolls
 	char** 	server_names;
 	unsigned int length; /* Server array length */
@@ -141,7 +141,7 @@ Client frame(Client client)
 
 	failed_to_query_messages = 0;
 
-	/* Update the state according to inputs*/
+	/* Update the state according to inputs TODO */
 	scroll = 10;
 	if (scroll > 0)
 	{
@@ -150,7 +150,7 @@ Client frame(Client client)
 	client.y += scroll; /* scroll TODO user input */
 	// TODO if changed channel -> re set client.bottom_of_current_channel to the correct state
 
-	/* Update the backend: fetch new informations.. and update the frontend accordingly (create new channels if needed) */ // TODO
+	/* Update the backend: fetch new informations.. and update the frontend accordingly (create new channels if needed) */
 	res = backend_updates_fetch();
 	if (res != 0)
 	{
@@ -265,10 +265,21 @@ Client frame(Client client)
 						realloc(cur_group.channels, (sizeof *cur_group.channels) * cur_group.cap);
 					}
 					cur_group.channel_ids[cur_group.length] = channel_update.channel_id;
-					cur_group.channel_names[client.length] = channel_update.channel_name;
-					cur_group.channel_unreads[client.length] = 0;
-					cur_group.channels[cur_group.length].cap = 0;
+					cur_group.channel_names[cur_group.length] = channel_update.channel_name;
+					cur_group.channel_unreads[cur_group.length] = 0;
+					cur_group.channel_bottom_message_i[cur_group.length] = 0;
+
+					cap = 1024;
+					cur_group.channels[cur_group.length].cap = cap;
+					cur_group.channels[cur_group.length].start = 0;
 					cur_group.channels[cur_group.length].length = 0;
+					cur_channel = &cur_group.channels[cur_group.length];
+					cur_channel->unix_ms_timestamps = malloc((sizeof *cur_channel->unix_ms_timestamps) * cap);
+					cur_channel->messages= malloc((sizeof *cur_channel->messages) * cap);
+					cur_channel->senders= malloc((sizeof *cur_channel->senders) * cap);
+					cur_channel->message_lengths = malloc((sizeof *cur_channel->message_lengths) * cap);
+					cur_channel->heights = malloc((sizeof *cur_channel->heights) * cap);
+					
 					/* The other fields will get filled by the next updates for channels etc.. */
 					cur_group.length++;
 				}
@@ -458,6 +469,7 @@ Client frame(Client client)
 		client.bottom_message_y = message_y;
 	}
 	client.bottom_message = i; 
+	client.servers[client.server].groups[client.group].channel_bottom_message_i[client.channel] = i;
 	
 	/* Find the message at the bottom & top of the screen by going upwards */
 	i = client.bottom_message;
@@ -489,6 +501,7 @@ Client frame(Client client)
 		{
 			client.bottom_message_y = message_y - height[i]; /* bottom of the message */
 			client.bottom_message = i		
+			client.servers[client.server].groups[client.group].channel_bottom_message_i[client.channel] = i;
 			target_y = client.y + client.message_area_height;
 		}
 		/* Search upwards */
@@ -645,33 +658,6 @@ Client frame(Client client)
 		/* Maybe block the scroll ? */	
 	}
 	top_message = i;
-	
-	/* Find the message at the bottom of the screen if it changed */
-	heights = cur_channel->heights;
-	cap = cur_channel->cap;
-	start = cur_channel->start;
-	length = cur_channel->length;
-
-	if (length > 0) 
-	{
-		message_y = client.bottom_message_y;
-		i = client.bottom_message;
-		dist_start = i - start + 1;
-		message_y += heights[i]; 
-		while (message_y < client.y && dist_start < length)
-		{
-			i++;
-			dist_start++;
-			if (i >= cap)
-			{
-				i = 0;
-			}
-			message_y += heights[i];
-			
-		}
-		client.bottom_message = i;
-		client.bottom_message_y = message_y - heights[i];
-	}
 	
 	/* Draw user interface */ TODO
 	/* Draw the servers */ TODO
