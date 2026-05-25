@@ -13,7 +13,7 @@ typedef struct {
 	Channel* channels;
 	char** channel_names;
 	char* channel_unreads; /* TODO something cleaner once there will be more bools */
-	// TODO scrolls
+	unsigned int* channel_bottom_message_i; /* index of the message at the bottom of the screen */
 	int* channel_ids; /* ids must be delivered by the backend in ascending order, and stored here likewise */
 	unsigned int length;
 	unsigned int cap;
@@ -75,13 +75,14 @@ typedef struct {
 	char** 	server_names;
 	unsigned int length; /* Server array length */
 	unsigned int cap; /* Server array cap */
-	unsigned int server;
-	unsigned int group;
-	unsigned int channel;
+	unsigned int server; /* index */
+	unsigned int group; /* index */
+	unsigned int channel; /* index */
 	unsigned int bottom_message; /* reference message for height, the one at the bottom of the screen */
 	unsigned int bottom_message_y; /* y coord of the bottom of the bottom message */
 	unsigned int message_area_height;
 	unsigned int message_space_width;
+	unsigned int bottom_of_current_channel; /* if true -> client will be in autoscroll when new messages arrive */
 } Client;
 
 /* Returns -1 if not found */
@@ -121,7 +122,7 @@ Client init(Client client)
 Client frame(Client client)
 {
 	int i, dist_start, message_y, target_y, res, count, first_part_len, second_part_len, overwrite_len;
-	int server_i, group_i, write_i, bottom_of_current_channel;
+	int server_i, group_i, write_i;
 	Channel* cur_channel;
 	ChannelGroup cur_group;
 	Server cur_server;
@@ -141,7 +142,13 @@ Client frame(Client client)
 	failed_to_query_messages = 0;
 
 	/* Update the state according to inputs*/
-	client.y += 10; /* scroll TODO user input */
+	scroll = 10;
+	if (scroll > 0)
+	{
+		client.bottom_of_current_channel = 0;
+	}
+	client.y += scroll; /* scroll TODO user input */
+	// TODO if changed channel -> re set client.bottom_of_current_channel to the correct state
 
 	/* Update the backend: fetch new informations.. and update the frontend accordingly (create new channels if needed) */ // TODO
 	res = backend_updates_fetch();
@@ -281,9 +288,37 @@ Client frame(Client client)
 			while (count != 0)
 			{
 				count = backend_message_update_fetch(&message_update); /* count is often 0 */
-				TODO
+				if (client.bottom_of_current_channel)
+				{
+					if (message_update.server_id == client.server 
+						&& message_update.group_id == client.group && message_update.channel_id == client.channel)
+					{
+						/* if it is the current channel & the client is in autoscroll : show the new message */
+						client.bottom_message_y += client.message_area_height * 9 / 10; /* raise the message at the bottom to trigger the query for new messages */
+					}
+				}
+				else
+				{
+					/* Register the channel/server/group as unread */
+					server_i = dichotomy_int(channel_update.server_id, client.server_ids, client.length)
+					if (server_i == -1)
+						error(Server not found in new messages update);
+					}
+					client.server_unreads[server_i] += 1;
+					cur_server = client.servers[server_i];
+					group_i = dichotomy_int(channel_update.group_id, cur_server.groups, cur_server.length);
+					if (group_i == -1) 
+						error(Group not found in new messages update);
+					}
+					cur_server.group_unreads[group_i] += 1;
+					cur_group = cur_server.groups[group_i];
+					i = dichotomy_int(channel_update.channel_id, cur_group.channels, cur_group.length);
+					if (i == -1) 
+						error(Channel not found in new messages update);
+					}
+					cur_group.channel_unreads[i] += 1;
+				}
 			}
-			
 		}
 	}
 	
@@ -314,11 +349,10 @@ Client frame(Client client)
 	target_y = client.y;
 	while (message_y > target_y)
 	{
-		/* Search upwards */
+		/* Search downwards */
 		i--;
 		dist_start--;
-		message_y -= heights[i];
-		if (i == 0)
+		if (i == -1)
 		{
 			i = cap - 1;
 		}
@@ -405,11 +439,19 @@ Client frame(Client client)
 			/* the backend knows it can clean those up if needed */
 			backend_newer_messages_query_finished(64, client.server, client.group, client.channel, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths);
 		}
+		message_y -= heights[i];
 	}
-	bottom_of_current_channel = message_y > target_y; /* if true: autoscroll for new messages */
-	if (bottom_of_current_channel)
+	client.bottom_of_current_channel = message_y >= target_y; /* if true: autoscroll for new messages */
+	if (client.bottom_of_current_channel)
 	{
 		client.bottom_message_y = target_y;
+		/* Clear the unreads */
+		cur_server = client.servers[client.server];
+		cur_group = cur_server.groups[client.group];
+		nb_unreads = cur_group.channel_unreads[client.channel];
+		cur_group.channel_unreads[client.channel] = 0;
+		cur_server.group_unreads[group_i] -= nb_unreads;
+		client.server_unreads[server_i] -= nb_unreads;
 	}
 	else
 	{
@@ -458,7 +500,7 @@ Client frame(Client client)
 		}
 		if (dist_start == length)
 		{
-			/* Query more messages if we need more */ TODO handle message heights
+			/* Query more messages if we need more */ 
 			res = backend_older_messages_query(64, client.server, client.group, client.channel, &ret_unix_ms_timestamps, &ret_messages, &ret_senders, &ret_message_lengths);
 			if (res == -1)
 			{
@@ -638,5 +680,7 @@ Client frame(Client client)
 	/* Draw the input bar */ TODO
 
 	/* Draw floating elements (on top of the rest) */ TODO maybe none?
+
+	return client;
 }
 
